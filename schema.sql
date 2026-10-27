@@ -58,6 +58,7 @@ create table if not exists public.tasks (
   emoji text not null default '✅',
   days smallint[] not null default '{1,2,3,4,5}',
   one_off_date date,
+  min_photos int not null default 1 check (min_photos between 1 and 10),
   active boolean not null default true,
   sort int not null default 0,
   created_at timestamptz not null default now()
@@ -70,6 +71,7 @@ create table if not exists public.completions (
   task_id uuid not null references public.tasks(id) on delete cascade,
   day date not null,
   photo_path text not null,
+  photo_paths text[] not null default '{}',
   status text not null default 'done' check (status in ('done', 'redo')),
   parent_note text,
   created_at timestamptz not null default now(),

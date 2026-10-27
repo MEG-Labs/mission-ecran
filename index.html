@@ -20,6 +20,7 @@
   --r:18px;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent;min-height:100vh}
 button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
@@ -122,6 +123,10 @@ h2{font-size:18px;margin:22px 0 10px}
 dialog{border:0;border-radius:20px;padding:20px;max-width:min(92vw,520px);width:100%}
 dialog::backdrop{background:rgba(15,20,25,.55)}
 dialog.photo{padding:0;background:#000;max-width:96vw}
+dialog.gallery{max-width:min(96vw,700px);max-height:90vh;overflow:auto}
+dialog.gallery img{display:block;width:100%;border-radius:12px;margin-top:10px}
+.proof .img{position:relative}
+.proof .n{position:absolute;right:8px;bottom:8px;background:rgba(15,20,25,.75);color:#fff;font-size:13px;font-weight:700;padding:3px 8px;border-radius:999px}
 dialog.photo img{display:block;max-width:96vw;max-height:86vh;margin:auto}
 .loading{text-align:center;padding:48px 0;color:var(--muted)}
 </style>
@@ -173,15 +178,19 @@ function setIconBadge(n) {
     else navigator.clearAppBadge?.()?.catch?.(() => {});
   } catch {}
 }
+const photoCount = c => c ? (c.photo_paths?.length || (c.photo_path ? 1 : 0)) : 0;
+const needed = t => Math.max(1, t.min_photos || 1);
+const isDone = (t, c) => !!c && c.status === "done" && photoCount(c) >= needed(t);
+
 function remainingFor(tasks, comps, childId, d) {
   const list = tasksForDay(tasks, childId, d);
-  const done = list.filter(t => comps.some(c => c.task_id === t.id && c.status === "done")).length;
+  const done = list.filter(t => comps.some(c => c.task_id === t.id && isDone(t, c))).length;
   return {left: list.length - done, total: list.length};
 }
 
 function helpBox(kids, allTasks, allComps, childId, d) {
   const others = kids.filter(k => k.id !== childId).map(k => ({
-    k, left: tasksForDay(allTasks, k.id, d).filter(t => !allComps.some(c => c.task_id === t.id && c.status === "done"))
+    k, left: tasksForDay(allTasks, k.id, d).filter(t => !allComps.some(c => c.task_id === t.id && isDone(t, c)))
   }));
   if (!others.length) return "";
   const busy = others.filter(o => o.left.length);
@@ -237,19 +246,24 @@ function supaStore() {
       if (childId) q = q.eq("child_id", childId);
       return ok(await q);
     },
-    async submitProof(childId, taskId, day, blob) {
+    async submitProof(childId, taskId, day, blob, prevPaths = []) {
       const path = `${childId}/${day}/${taskId}-${Date.now()}.jpg`;
       ok(await sb.storage.from("preuves").upload(path, blob, {contentType: "image/jpeg", upsert: false}));
+      const paths = [...prevPaths, path];
       return ok(await sb.from("completions")
-        .upsert({child_id: childId, task_id: taskId, day, photo_path: path, status: "done", parent_note: null}, {onConflict: "task_id,day"})
+        .upsert({child_id: childId, task_id: taskId, day, photo_path: paths[0], photo_paths: paths, status: "done", parent_note: null}, {onConflict: "task_id,day"})
         .select().single());
     },
     async setCompletion(id, patch) { ok(await sb.from("completions").update(patch).eq("id", id)); },
-    async photoUrl(c) {
-      if (urlCache.has(c.photo_path)) return urlCache.get(c.photo_path);
-      const {data, error} = await sb.storage.from("preuves").createSignedUrl(c.photo_path, 3600);
-      if (error) throw error;
-      urlCache.set(c.photo_path, data.signedUrl); return data.signedUrl;
+    async photoUrls(c) {
+      const paths = c.photo_paths?.length ? c.photo_paths : [c.photo_path];
+      const missing = paths.filter(p => !urlCache.has(p));
+      if (missing.length) {
+        const {data, error} = await sb.storage.from("preuves").createSignedUrls(missing, 3600);
+        if (error) throw error;
+        data.forEach(x => x.signedUrl && urlCache.set(x.path, x.signedUrl));
+      }
+      return paths.map(p => urlCache.get(p)).filter(Boolean);
     },
     async latestRequest(childId, day) {
       const r = ok(await sb.from("requests").select("*").eq("child_id", childId).eq("day", day).order("created_at", {ascending: false}).limit(1));
@@ -274,7 +288,7 @@ function demoStore() {
       tasks: [
         {id: uid(), child_id: a, title: "Vider ma boîte à lunch", emoji: "🍱", days: [1,2,3,4,5], one_off_date: null, active: true, sort: 0},
         {id: uid(), child_id: a, title: "Faire mes devoirs", emoji: "📚", days: [1,2,3,4], one_off_date: null, active: true, sort: 1},
-        {id: uid(), child_id: a, title: "Ranger ma chambre", emoji: "🧸", days: [3,5], one_off_date: null, active: true, sort: 2},
+        {id: uid(), child_id: a, title: "Ranger ma chambre", emoji: "🧸", days: [2,5], one_off_date: null, active: true, sort: 2, min_photos: 4},
         {id: uid(), child_id: b, title: "Accrocher mon manteau", emoji: "🧥", days: [1,2,3,4,5], one_off_date: null, active: true, sort: 0},
         {id: uid(), child_id: b, title: "Lire 15 minutes", emoji: "📖", days: [1,2,3,4,5], one_off_date: null, active: true, sort: 1}],
       completions: [], requests: []
@@ -302,15 +316,16 @@ function demoStore() {
     async saveTask(t) { return upsert("tasks", t); },
     async deleteTask(id) { db.tasks = db.tasks.filter(t => t.id !== id); persist(); },
     async completions(day, childId) { return clone(db.completions.filter(c => c.day === day && (!childId || c.child_id === childId))); },
-    async submitProof(childId, taskId, day, blob) {
+    async submitProof(childId, taskId, day, blob, prevPaths = []) {
       const small = await compress(blob, 720, 0.6);
       const data = await blobToDataUrl(small);
       db.completions = db.completions.filter(c => !(c.task_id === taskId && c.day === day));
-      const n = {id: uid(), child_id: childId, task_id: taskId, day, photo_path: "demo", photo_data: data, status: "done", parent_note: null, created_at: new Date().toISOString()};
+      const paths = [...prevPaths, data];
+      const n = {id: uid(), child_id: childId, task_id: taskId, day, photo_path: "demo", photo_paths: paths, status: "done", parent_note: null, created_at: new Date().toISOString()};
       db.completions.push(n); persist(); return n;
     },
     async setCompletion(id, patch) { const c = db.completions.find(x => x.id === id); Object.assign(c, patch); persist(); },
-    async photoUrl(c) { return c.photo_data; },
+    async photoUrls(c) { return c.photo_paths || []; },
     async latestRequest(childId, day) {
       const r = db.requests.filter(x => x.child_id === childId && x.day === day).sort((a, b) => b.created_at.localeCompare(a.created_at));
       return r[0] ? clone(r[0]) : null;
@@ -340,6 +355,14 @@ function ask({title, text = "", placeholder = "", value = "", okLabel = "OK", ca
     dlg.showModal();
     dlg.querySelector("[name=v]")?.focus();
   });
+}
+function showPhotos(urls, title) {
+  dlg.className = "gallery";
+  dlg.innerHTML = `<div class="row" style="margin-bottom:10px"><b class="grow">${esc(title)}</b><button class="btn ghost sm" value="x">Fermer</button></div>
+    ${urls.map((u, i) => `<img src="${esc(u)}" alt="Photo ${i + 1}">`).join("")}`;
+  dlg.onclose = null; dlg.onclick = null;
+  dlg.querySelector("button").onclick = () => dlg.close();
+  dlg.showModal();
 }
 function showPhoto(src) {
   dlg.className = "photo";
@@ -421,7 +444,7 @@ async function kidView(childId) {
     const [allComps, req] = await Promise.all([store.completions(d), store.latestRequest(childId, d)]);
     const comps = allComps.filter(c => c.child_id === childId);
     const byTask = new Map(comps.map(c => [c.task_id, c]));
-    const doneCount = tasks.filter(t => byTask.get(t.id)?.status === "done").length;
+    const doneCount = tasks.filter(t => isDone(t, byTask.get(t.id))).length;
     const allDone = doneCount === tasks.length;
     const locked = req && (req.status === "pending" || req.status === "approved");
     const pct = tasks.length ? Math.round(doneCount / tasks.length * 100) : 100;
@@ -452,21 +475,26 @@ async function kidView(childId) {
       ${allDone ? helpBox(kids, allTasks, allComps, childId, d) : ""}
       <div class="stack" style="margin-top:16px">${tasks.map(t => {
         const c = byTask.get(t.id);
-        const st = c?.status === "done" ? "done" : c?.status === "redo" ? "redo" : "";
+        const n = needed(t);
+        const st = c?.status === "redo" ? "redo" : isDone(t, c) ? "done" : (photoCount(c) > 0 ? "partial" : "");
+        const have = st === "redo" ? 0 : photoCount(c);
         const thumb = localThumbs.get(t.id + d);
-        return `<div class="task ${st}">
+        const camLabel = st === "done" ? "🔄" : n > 1 ? `📸 ${have + 1}/${n}` : "📸 Photo";
+        return `<div class="task ${st === "partial" ? "" : st}">
           <div class="em">${st === "done" ? "✅" : esc(t.emoji)}</div>
           <div class="grow"><div class="t">${esc(t.title)}</div>
-            ${st === "done" ? `<div class="small muted">Photo envoyée ${fmtTime(c.created_at)}</div>` : ""}
-            ${st === "redo" ? `<div class="note">À refaire${c.parent_note ? " : " + esc(c.parent_note) : ""}</div>` : ""}
+            ${st === "done" ? `<div class="small muted">${n > 1 ? `${have} photos envoyées` : "Photo envoyée"} ${fmtTime(c.created_at)}</div>` : ""}
+            ${st === "partial" ? `<div class="small" style="color:var(--warn);font-weight:600">${have} photo${have > 1 ? "s" : ""} sur ${n} — continue !</div>` : ""}
+            ${!st && n > 1 ? `<div class="small muted">${n} photos à prendre</div>` : ""}
+            ${st === "redo" ? `<div class="note">À refaire${c.parent_note ? " : " + esc(c.parent_note) : ""}${n > 1 ? ` (${n} photos)` : ""}</div>` : ""}
           </div>
-          ${thumb && st === "done" ? `<img class="thumb" src="${thumb}" alt="">` : ""}
-          ${locked ? "" : `<button class="cam ${st === "done" ? "again" : ""}" data-task="${t.id}">${st === "done" ? "🔄" : "📸 Photo"}</button>`}
+          ${thumb && (st === "done" || st === "partial") ? `<img class="thumb" src="${thumb}" alt="">` : ""}
+          ${locked ? "" : `<button class="cam ${st === "done" ? "again" : ""}" data-task="${t.id}" data-reset="${st === "done" || st === "redo" ? 1 : 0}" aria-label="${st === "done" ? "Recommencer les photos" : "Prendre une photo"}">${camLabel}</button>`}
         </div>`;
       }).join("")}</div>`);
 
     $("#switch").onclick = () => { sessionStorage.setItem("choose", "1"); location.hash = "#/"; };
-    app.querySelectorAll("[data-task]").forEach(b => b.onclick = () => { pendingTask = b.dataset.task; $("#camera").value = ""; $("#camera").click(); });
+    app.querySelectorAll("[data-task]").forEach(b => b.onclick = () => { pendingTask = {id: b.dataset.task, reset: b.dataset.reset === "1"}; $("#camera").value = ""; $("#camera").click(); });
     const askBtn = $("#ask");
     if (askBtn) askBtn.onclick = async () => {
       askBtn.disabled = true; askBtn.innerHTML = `<span class="spin"></span> Envoi…`;
@@ -480,14 +508,18 @@ async function kidView(childId) {
 
   $("#camera").onchange = async e => {
     const file = e.target.files?.[0]; if (!file || !pendingTask) return;
-    const taskId = pendingTask; pendingTask = null;
+    const {id: taskId, reset} = pendingTask; pendingTask = null;
     const btn = app.querySelector(`[data-task="${taskId}"]`);
     if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spin"></span>`; }
     try {
       const blob = await compress(file);
       localThumbs.set(taskId + d, URL.createObjectURL(blob));
-      await store.submitProof(childId, taskId, d, blob);
-      toast("Photo envoyée ✅");
+      const cur = (await store.completions(d, childId)).find(c => c.task_id === taskId);
+      const prev = reset || !cur ? [] : (cur.photo_paths?.length ? cur.photo_paths : (cur.photo_path ? [cur.photo_path] : []));
+      await store.submitProof(childId, taskId, d, blob, prev);
+      const t = tasks.find(x => x.id === taskId);
+      const left = t ? needed(t) - prev.length - 1 : 0;
+      toast(left > 0 ? `Photo envoyée ! Encore ${left}.` : "Photo envoyée ✅");
     } catch (err) { console.error(err); toast("L'envoi n'a pas marché, réessaie. " + (err.message || "")); }
     draw();
   };
@@ -565,7 +597,7 @@ async function paneRequests(pane, kids) {
   pane.innerHTML = `<div class="stack" style="margin-top:14px">${sorted.map(k => {
     const tasks = tasksForDay(allTasks, k.id, d);
     const kc = comps.filter(c => c.child_id === k.id);
-    const done = tasks.filter(t => kc.find(c => c.task_id === t.id && c.status === "done")).length;
+    const done = tasks.filter(t => kc.some(c => c.task_id === t.id && isDone(t, c))).length;
     const r = latest.get(k.id);
     const label = r ? {pending: "À valider", approved: r.minutes > 0 ? `Validé · ${r.minutes} min` : "Validé", rejected: "À revoir"}[r.status] : "Pas encore avisé";
     return `<div class="card" data-kidcard="${k.id}">
@@ -575,9 +607,9 @@ async function paneRequests(pane, kids) {
       ${kc.length ? `<div class="proofs">${tasks.filter(t => kc.find(c => c.task_id === t.id)).map(t => {
         const c = kc.find(x => x.task_id === t.id);
         return `<div class="proof ${c.status === "redo" ? "redo" : ""}">
-          <button class="img" data-photo="${c.id}" aria-label="Voir la photo"></button>
+          <button class="img" data-photo="${c.id}" data-title="${esc(t.emoji + " " + t.title)}" aria-label="Voir les photos">${photoCount(c) > 1 ? `<span class="n">📷 ${photoCount(c)}</span>` : ""}</button>
           <div class="cap"><b>${esc(t.emoji)} ${esc(t.title)}</b>
-            <span class="small muted">${fmtTime(c.created_at)}${c.status === "redo" ? " · à refaire" : ""}</span>
+            <span class="small muted">${fmtTime(c.created_at)}${c.status === "redo" ? " · à refaire" : c.status === "done" && !isDone(t, c) ? ` · ${photoCount(c)}/${needed(t)} photos` : ""}</span>
             ${c.status === "done" && r?.status !== "approved" ? `<div style="margin-top:6px"><button class="btn ghost sm" data-redo="${c.id}">À refaire</button></div>` : ""}
           </div></div>`;
       }).join("")}</div>` : ""}
@@ -600,7 +632,11 @@ async function paneRequests(pane, kids) {
   // photos (chargement différé)
   pane.querySelectorAll("[data-photo]").forEach(async el => {
     const c = comps.find(x => x.id === el.dataset.photo);
-    try { const u = await store.photoUrl(c); el.style.backgroundImage = `url("${u}")`; el.onclick = () => showPhoto(u); }
+    try {
+      const urls = await store.photoUrls(c);
+      el.style.backgroundImage = `url("${urls[0]}")`;
+      el.onclick = () => urls.length > 1 ? showPhotos(urls, el.dataset.title) : showPhoto(urls[0]);
+    }
     catch { el.textContent = "Photo introuvable"; }
   });
   pane.querySelectorAll("[data-min]").forEach(b => b.onclick = () => {
@@ -648,6 +684,7 @@ async function paneTasks(pane, kids) {
       <div class="row ${t.active ? "" : "off"}">
         <span style="font-size:26px">${esc(t.emoji)}</span>
         <div class="grow"><b>${esc(t.title)}</b><div class="small muted">${describe(t)}</div></div>
+        <button class="btn ghost sm" data-minph="${t.id}" aria-label="Photos minimum">📷 ${needed(t)}</button>
         <button class="btn ghost sm" data-toggle="${t.id}">${t.active ? "Pause" : "Activer"}</button>
         <button class="btn ghost sm" data-del="${t.id}" aria-label="Supprimer">🗑</button>
       </div>`).join("") : `<div class="muted">Aucune tâche.</div>`}</div>
@@ -662,6 +699,7 @@ async function paneTasks(pane, kids) {
         <label class="chip"><input type="radio" name="mode" value="rec" checked> Jours récurrents</label>
         <label class="chip"><input type="radio" name="mode" value="once"> Une seule date</label>
       </div>
+      <label class="field" style="max-width:220px"><span>Photos minimum</span><input name="minph" type="number" min="1" max="10" value="1"></label>
       <div id="recBox" class="days">${order.map(i => `<label><input type="checkbox" name="d" value="${i}" ${i >= 1 && i <= 5 ? "checked" : ""}><span>${DAY_LETTERS[i]}</span></label>`).join("")}</div>
       <label id="onceBox" class="field" hidden><span>Date</span><input type="date" name="date" value="${d}"></label>
       <button class="btn">Ajouter pour ${esc(k.name)}</button>
@@ -669,6 +707,13 @@ async function paneTasks(pane, kids) {
   pane.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => { taskKid = b.dataset.pick; paneTasks(pane, kids); });
   pane.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
     const t = tasks.find(x => x.id === b.dataset.toggle); await store.saveTask({id: t.id, active: !t.active}); paneTasks(pane, kids);
+  });
+  pane.querySelectorAll("[data-minph]").forEach(b => b.onclick = async () => {
+    const t = tasks.find(x => x.id === b.dataset.minph);
+    const v = await ask({title: "Photos minimum", text: t.title + " (1 à 10)", placeholder: "Nombre", value: String(needed(t)), okLabel: "Enregistrer"});
+    if (v === null) return;
+    const n = Math.min(10, Math.max(1, parseInt(v, 10) || 1));
+    await store.saveTask({id: t.id, min_photos: n}); toast(`${n} photo${n > 1 ? "s" : ""} minimum`); paneTasks(pane, kids);
   });
   pane.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     const t = tasks.find(x => x.id === b.dataset.del);
@@ -685,7 +730,8 @@ async function paneTasks(pane, kids) {
     const days = [...f.querySelectorAll("[name=d]:checked")].map(x => +x.value);
     if (!once && !days.length) return toast("Choisis au moins un jour");
     await store.saveTask({child_id: taskKid, title: f.title.value.trim(), emoji: f.emoji.value.trim() || "✅",
-      days: once ? [] : days, one_off_date: once ? f.date.value : null, active: true, sort: tasks.length});
+      days: once ? [] : days, one_off_date: once ? f.date.value : null, active: true, sort: tasks.length,
+      min_photos: Math.min(10, Math.max(1, +f.minph.value || 1))});
     toast("Tâche ajoutée"); paneTasks(pane, kids);
   };
 }
