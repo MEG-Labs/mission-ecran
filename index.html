@@ -623,9 +623,8 @@ async function paneRequests(pane, kids) {
           <button class="btn bad" data-reject="${r.id}">À revoir</button>
         </div>` : ""}
       ${r?.status === "approved" && r.parent_note ? `<div class="small muted" style="margin-top:10px">Ton mot : « ${esc(r.parent_note)} »</div>` : ""}
-      ${r?.status === "approved" && r.minutes > 0 ? `<div class="row" style="margin-top:12px">
-        <a class="btn ghost sm" href="intent://#Intent;package=com.google.android.apps.kids.familylink;end">Ouvrir Family Link</a>
-        <span class="small muted">Accorde ${r.minutes} min à ${esc(k.name)} dans Family Link.</span></div>` : ""}
+      ${r?.status === "approved" && r.minutes > 0 ? `<div class="status pending" style="margin-top:12px;padding:12px 14px;text-align:left;border-radius:14px;font-size:15px">
+        📱 Accorde <b>${r.minutes} min</b> à ${esc(k.name)} dans l'app <b>Family Link</b>.</div>` : ""}
     </div>`;
   }).join("")}</div>`;
 
