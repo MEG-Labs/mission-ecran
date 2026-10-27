@@ -46,6 +46,7 @@ create table if not exists public.children (
   emoji text not null default '🙂',
   color text not null default '#F26A1B',
   default_minutes int not null default 60,
+  parental_tool text not null default 'familylink' check (parental_tool in ('familylink', 'familysafety', 'both')),
   sort int not null default 0,
   created_at timestamptz not null default now()
 );

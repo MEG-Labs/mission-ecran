@@ -140,6 +140,8 @@ dialog.photo img{display:block;max-width:96vw;max-height:86vh;margin:auto}
 const CFG = window.APP_CONFIG || {};
 const DEMO = !CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY;
 const PARENT_LABEL = CFG.PARENT_LABEL || "papa ou maman";
+const TOOLS = {familylink: "Family Link", familysafety: "Family Safety", both: "Family Link et Family Safety"};
+const toolName = k => TOOLS[k?.parental_tool] || TOOLS.familylink;
 const DAY_LETTERS = ["D","L","M","M","J","V","S"];
 const DAY_NAMES = ["dim","lun","mar","mer","jeu","ven","sam"];
 const EMOJIS_KID = ["🦊","🐼","🦁","🐸","🐨","🦄","🐯","🐙","🚀","⚽","🎨","🦖"];
@@ -624,7 +626,7 @@ async function paneRequests(pane, kids) {
         </div>` : ""}
       ${r?.status === "approved" && r.parent_note ? `<div class="small muted" style="margin-top:10px">Ton mot : « ${esc(r.parent_note)} »</div>` : ""}
       ${r?.status === "approved" && r.minutes > 0 ? `<div class="status pending" style="margin-top:12px;padding:12px 14px;text-align:left;border-radius:14px;font-size:15px">
-        📱 Accorde <b>${r.minutes} min</b> à ${esc(k.name)} dans l'app <b>Family Link</b>.</div>` : ""}
+        📱 Accorde <b>${r.minutes} min</b> à ${esc(k.name)} dans <b>${toolName(k)}</b>.</div>` : ""}
     </div>`;
   }).join("")}</div>`;
 
@@ -655,7 +657,8 @@ async function paneRequests(pane, kids) {
     const note = card.querySelector("[data-note]").value.trim() || "Beau travail ! 😊";
     b.disabled = true;
     await store.decide(b.dataset.approve, {status: "approved", minutes, parent_note: note});
-    toast(minutes > 0 ? `Validé : ${minutes} min. Accorde-les dans Family Link.` : "Validé, sans temps d'écran.", 4000);
+    const kid = kids.find(x => x.id === card.dataset.kidcard);
+    toast(minutes > 0 ? `Validé : ${minutes} min. Accorde-les dans ${toolName(kid)}.` : "Validé, sans temps d'écran.", 4000);
     paneRequests(pane, kids);
   });
   pane.querySelectorAll("[data-reject]").forEach(b => b.onclick = async () => {
@@ -741,7 +744,7 @@ async function paneKids(pane, kids) {
     <div class="card list">${kids.length ? kids.map(k => `
       <div class="row">
         <span class="av" style="width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-size:22px;background:${esc(k.color)}">${esc(k.emoji)}</span>
-        <div class="grow"><b>${esc(k.name)}</b><div class="small muted">${k.default_minutes} min par défaut</div></div>
+        <div class="grow"><b>${esc(k.name)}</b><div class="small muted">${k.default_minutes} min par défaut · ${toolName(k)}</div></div>
         <button class="btn ghost sm" data-edit="${k.id}">Modifier</button>
         <button class="btn ghost sm" data-rm="${k.id}" aria-label="Retirer">🗑</button>
       </div>`).join("") : `<div class="muted">Aucun enfant.</div>`}</div>
@@ -752,16 +755,19 @@ async function paneKids(pane, kids) {
         <label class="field grow"><span>Prénom</span><input name="name" required></label>
         <label class="field" style="width:130px"><span>Minutes par défaut</span><input name="min" type="number" min="0" step="5" value="60"></label>
       </div>
+      <div><div class="small muted" style="margin-bottom:6px">Contrôle parental</div>
+        <div class="row">${Object.entries(TOOLS).map(([v, l], i) => `<label class="chip tool"><input type="radio" name="tool" value="${v}" ${i === 0 ? "checked" : ""} hidden>${v === "both" ? "Les deux" : l}</label>`).join("")}</div></div>
       <div><div class="small muted" style="margin-bottom:6px">Avatar</div>
         <div class="row">${EMOJIS_KID.map((e, i) => `<label class="chip"><input type="radio" name="emoji" value="${e}" ${i === 0 ? "checked" : ""} hidden>${e}</label>`).join("")}</div></div>
       <button class="btn" id="kidSave">Ajouter</button>
     </form>`;
   const f = $("#kidForm");
-  const mark = () => f.querySelectorAll("[name=emoji]").forEach(r => r.parentElement.classList.toggle("on", r.checked));
-  f.querySelectorAll("[name=emoji]").forEach(r => r.onchange = mark); mark();
+  const mark = () => f.querySelectorAll("[name=emoji],[name=tool]").forEach(r => r.parentElement.classList.toggle("on", r.checked));
+  f.querySelectorAll("[name=emoji],[name=tool]").forEach(r => r.onchange = mark); mark();
   pane.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
     const k = kids.find(x => x.id === b.dataset.edit);
     f.id.value = k.id; f.name.value = k.name; f.min.value = k.default_minutes;
+    const tr = [...f.querySelectorAll("[name=tool]")].find(x => x.value === (k.parental_tool || "familylink")); if (tr) tr.checked = true;
     const r = [...f.querySelectorAll("[name=emoji]")].find(x => x.value === k.emoji); if (r) r.checked = true; mark();
     $("#formTitle").textContent = "Modifier " + k.name; $("#kidSave").textContent = "Enregistrer";
     f.scrollIntoView({behavior: "smooth"});
@@ -773,7 +779,7 @@ async function paneKids(pane, kids) {
   });
   f.onsubmit = async e => {
     e.preventDefault();
-    const obj = {name: f.name.value.trim(), emoji: f.emoji.value, default_minutes: f.min.value === "" ? 60 : Math.max(0, +f.min.value)};
+    const obj = {name: f.name.value.trim(), emoji: f.emoji.value, default_minutes: f.min.value === "" ? 60 : Math.max(0, +f.min.value), parental_tool: f.tool.value};
     if (f.id.value) obj.id = f.id.value;
     else { obj.color = COLORS[kids.length % COLORS.length]; obj.sort = kids.length; }
     await store.saveChild(obj); toast("Enregistré"); parentView();
