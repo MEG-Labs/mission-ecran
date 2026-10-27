@@ -1,0 +1,17 @@
+{
+  "name": "Mission Écran",
+  "short_name": "Mission Écran",
+  "description": "Tâches après l'école avec preuve photo, et temps d'écran approuvé par le parent.",
+  "lang": "fr-CA",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFF7EF",
+  "theme_color": "#1F2A33",
+  "icons": [
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
