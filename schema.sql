@@ -184,6 +184,8 @@ exception when others then
 end;
 $$;
 
+revoke execute on function public.notify_new_request() from anon, authenticated, public;
+
 drop trigger if exists requests_notify on public.requests;
 create trigger requests_notify
   after insert on public.requests
