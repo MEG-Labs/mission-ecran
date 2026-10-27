@@ -60,6 +60,12 @@ h2{font-size:18px;margin:22px 0 10px}
 .av{position:relative}
 .pastille{position:absolute;top:-4px;right:-6px;padding:0 7px;border-radius:15px;background:#DC2626;color:#fff;font:800 15px/28px system-ui,sans-serif;text-align:center;border:3px solid var(--card);box-sizing:border-box;min-width:30px;height:30px;line-height:24px}
 .pastille.fini{background:var(--ok)}
+.help{background:#EEF6FF;border:2px solid #CFE3FA;border-radius:22px;padding:16px;margin:16px 0}
+.help-t{font-size:19px;font-weight:800;color:#1E3A5F}
+.help-kid+.help-kid{margin-top:12px;padding-top:12px;border-top:1px dashed #CFE3FA}
+.help .av.sm{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-size:19px}
+.help ul{list-style:none;margin:8px 0 0;padding:0 0 0 44px}
+.help li{padding:3px 0;font-size:16px}
 .parent-link{display:block;margin:28px auto 0;color:var(--muted);font-size:15px;padding:12px}
 
 /* Écran enfant */
@@ -171,6 +177,24 @@ function remainingFor(tasks, comps, childId, d) {
   const list = tasksForDay(tasks, childId, d);
   const done = list.filter(t => comps.some(c => c.task_id === t.id && c.status === "done")).length;
   return {left: list.length - done, total: list.length};
+}
+
+function helpBox(kids, allTasks, allComps, childId, d) {
+  const others = kids.filter(k => k.id !== childId).map(k => ({
+    k, left: tasksForDay(allTasks, k.id, d).filter(t => !allComps.some(c => c.task_id === t.id && c.status === "done"))
+  }));
+  if (!others.length) return "";
+  const busy = others.filter(o => o.left.length);
+  if (!busy.length) return `<div class="help"><div class="help-t">🎉 Tout le monde a fini aujourd'hui !</div></div>`;
+  return `<div class="help">
+    <div class="help-t">🤝 Tu as fini ! Peux-tu aider ${busy.length > 1 ? "ton frère ou ta sœur" : esc(busy[0].k.name)} ?</div>
+    <div class="small muted" style="margin:2px 0 10px">Voici ce qu'il reste à faire :</div>
+    ${busy.map(o => `<div class="help-kid">
+      <div class="row"><span class="av sm" style="background:${esc(o.k.color)}">${esc(o.k.emoji)}</span><b>${esc(o.k.name)}</b>
+        <span class="small muted">${o.left.length} tâche${o.left.length > 1 ? "s" : ""}</span></div>
+      <ul>${o.left.map(t => `<li><span>${esc(t.emoji)}</span> ${esc(t.title)}</li>`).join("")}</ul>
+    </div>`).join("")}
+  </div>`;
 }
 
 /* ---------- Photos : compression avant envoi ---------- */
@@ -394,7 +418,8 @@ async function kidView(childId) {
   const tasks = tasksForDay(allTasks, childId, d);
 
   const draw = async () => {
-    const [comps, req] = await Promise.all([store.completions(d, childId), store.latestRequest(childId, d)]);
+    const [allComps, req] = await Promise.all([store.completions(d), store.latestRequest(childId, d)]);
+    const comps = allComps.filter(c => c.child_id === childId);
     const byTask = new Map(comps.map(c => [c.task_id, c]));
     const doneCount = tasks.filter(t => byTask.get(t.id)?.status === "done").length;
     const allDone = doneCount === tasks.length;
@@ -424,6 +449,7 @@ async function kidView(childId) {
         <div><h2>Salut ${esc(child.name)} !</h2><div class="muted">${tasks.length ? `${doneCount} sur ${tasks.length} tâche${tasks.length > 1 ? "s" : ""}` : "Journée libre"}</div></div></div>
       ${tasks.length ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ""}
       ${status ? `<div style="margin:16px 0">${status}</div>` : ""}
+      ${allDone ? helpBox(kids, allTasks, allComps, childId, d) : ""}
       <div class="stack" style="margin-top:16px">${tasks.map(t => {
         const c = byTask.get(t.id);
         const st = c?.status === "done" ? "done" : c?.status === "redo" ? "redo" : "";
