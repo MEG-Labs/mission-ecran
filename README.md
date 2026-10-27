@@ -1,61 +1,93 @@
 # Mission Écran
 
-App web installable (PWA) pour Android : les enfants font leurs tâches après l'école, prennent une photo comme preuve, puis demandent leur temps d'écran. Le parent reçoit une notification push, regarde les photos, approuve (ou demande de refaire une tâche), puis accorde le temps dans Google Family Link.
+App web installable (PWA) pour Android : les enfants font leurs tâches après l'école et prennent une photo comme preuve, puis demandent leur temps d'écran. Le parent reçoit une notification push, regarde les photos et approuve (ou demande de refaire une tâche), puis accorde le temps dans Google Family Link.
+
+## Confidentialité
+
+Ce dépôt est public mais ne contient **aucune donnée personnelle**.
+
+- **Données privées** : prénoms, tâches, photos, historique, courriels autorisés et sujet ntfy restent dans Supabase.
+- **Accès** : sans connexion, l'app et l'API ne montrent rien. Chaque appareil se connecte une fois.
+  - **Appareil familial** (tablette des enfants) : voit les tâches, envoie des photos, fait une demande. Ne peut pas approuver ni voir les photos.
+  - **Parent** : tout.
+- **Notification** : envoyée par Supabase (pas par le navigateur), avec un message générique sans prénom.
 
 ## Essayer tout de suite (mode démo)
 
-Laisse `config.js` tel quel et ouvre `index.html` via un petit serveur local :
+Laisse `config.js` vide, puis lance un serveur local :
 
 ```
 python -m http.server 8000
 ```
 
-puis http://localhost:8000. En mode démo, tout reste dans le navigateur de l'appareil (pas de notif, pas de partage entre téléphones).
+Ouvre ensuite http://localhost:8000. En mode démo, tout reste dans le navigateur, avec des données fictives.
 
 ## Mise en service (≈ 30 minutes)
 
 ### 1. Supabase (base de données + photos, gratuit)
-1. Crée un compte sur https://supabase.com et un nouveau projet (région : Canada Central).
-2. **SQL Editor → New query** : colle `schema.sql`, remplace `ton.courriel@exemple.com` par ton courriel (ajoute l'autre parent au besoin), puis **Run**.
-3. **Authentication → Users → Add user** : crée ton compte parent (même courriel, avec un mot de passe).
-4. **Authentication → Sign In / Providers** : désactive « Allow new users to sign up » (seuls les comptes que tu crées pourront se connecter).
-5. **Project Settings → API** : copie l'URL du projet et la clé `anon public` dans `config.js`.
 
-### 2. Notifications push (ntfy, gratuit)
+1. Crée un compte sur https://supabase.com et un projet (région : Canada Central).
+2. Dans **SQL Editor → New query**, colle `schema.sql` tel quel, puis clique sur **Run**.
+3. Dans **Authentication → Users → Add user**, crée deux comptes :
+   - **ton compte parent** (ton courriel) ;
+   - **un compte appareil familial**, par exemple un alias `famille@…`. Ce courriel ne reçoit rien ; il sert d'identifiant.
+4. Dans **Authentication → Sign In / Providers**, désactive **Allow new users to sign up**.
+5. Dans **Project Settings → API**, copie l'URL et la clé `anon public` dans `config.js` (crayon ✏️ sur GitHub).
+
+### 2. Réglages privés (dans Supabase seulement, jamais dans le dépôt)
+
+Dans **SQL Editor → New query**, remplace les valeurs et exécute :
+
+```sql
+insert into public.members (email, role) values
+  ('ton.courriel@exemple.com', 'parent'),
+  ('famille@exemple.com',      'appareil');
+
+insert into public.private_settings (key, value) values
+  ('ntfy_topic', 'un-nom-long-et-secret-ici'),
+  ('app_url',    'https://meg-labs.github.io/mission-ecran/#/parent');
+```
+
+Pour ajouter l'autre parent plus tard, ajoute une ligne `'parent'` dans `members` et crée son compte dans Authentication.
+
+**Ne sauvegarde pas cette requête dans un fichier du dépôt.**
+
+### 3. Notifications push (ntfy, gratuit)
+
 1. Installe **ntfy** sur ton téléphone Android (Play Store).
-2. Choisis un nom de sujet long et impossible à deviner, ex. `mission-ecran-7f3k9q2xw8`.
-3. Dans l'app ntfy : **+ → Subscribe to topic** avec ce nom.
-4. Mets le même nom dans `NTFY_TOPIC` de `config.js`.
+2. Touche **+ → Subscribe to topic** et entre exactement le même nom que `ntfy_topic` à l'étape 2.
 
-Le nom du sujet sert de mot de passe pour les notifs : ne le partage pas.
+### 4. Hébergement (GitHub Pages)
 
-### 3. Hébergement (GitHub Pages, gratuit)
-1. Crée un dépôt GitHub (ex. `MEG-Labs/mission-ecran`) et pousse le contenu de ce dossier.
-2. **Settings → Pages → Deploy from a branch → main / root**.
-3. L'app sera à `https://<compte>.github.io/mission-ecran/` (HTTPS requis pour la caméra et l'installation).
+1. Dans le dépôt, va dans **Settings → Pages**.
+2. Choisis **Deploy from a branch**, puis **main / (root)**, et clique sur **Save**.
+3. L'app sera à https://meg-labs.github.io/mission-ecran/.
 
-### 4. Installer sur les appareils
-- **Tablette/téléphone des enfants** : ouvre l'URL dans Chrome → menu ⋮ → **Ajouter à l'écran d'accueil**. Chaque enfant choisit son avatar ; l'appareil s'en souvient (bouton « Changer » pour passer à un autre enfant).
-- **Ton téléphone** : même URL → **🔒 Espace parent** → connexion. Ajoute-la aussi à l'écran d'accueil ; la notif ntfy ouvre directement cette page.
-- Dans Family Link, ajoute l'app Mission Écran (Chrome) aux apps **toujours autorisées** pour que les enfants y aient accès même quand leur temps est écoulé.
+### 5. Installer sur les appareils
+
+**Tablette ou téléphone des enfants**
+1. Ouvre l'URL dans Chrome et connecte-toi avec le **compte appareil familial**. La connexion reste active.
+2. Menu ⋮ → **Ajouter à l'écran d'accueil**.
+3. Dans Family Link, ajoute l'app aux apps **toujours autorisées**.
+
+**Ton téléphone**
+1. Ouvre la même URL et connecte-toi avec ton **compte parent**.
+2. Ajoute l'app à l'écran d'accueil. La notif ntfy ouvre directement l'espace parent.
 
 ## Utilisation au quotidien
-- **Onglet Enfants** : prénom, avatar, minutes par défaut.
-- **Onglet Tâches** : tâches récurrentes (jours de la semaine) ou ponctuelles (une seule date). Bouton Pause pour suspendre une tâche sans la supprimer.
-- **Onglet Demandes** : photos du jour par enfant, choix des minutes, Approuver / Refuser, ou « À refaire » sur une photo précise (l'enfant voit ta note et la tâche revient à faire).
-- **Onglet Historique** : 14 derniers jours et total de minutes accordées par enfant.
+
+- **Enfants** : prénom, avatar, minutes par défaut.
+- **Tâches** : récurrentes (jours de la semaine) ou ponctuelles (une seule date). Le bouton Pause suspend une tâche sans la supprimer.
+- **Demandes** : photos du jour, choix des minutes, Approuver / Refuser, ou « À refaire » sur une photo précise.
+- **Historique** : 14 derniers jours et total de minutes par enfant.
 
 Après l'approbation, le bouton **Ouvrir Family Link** lance l'app pour accorder le temps.
 
-## Sécurité, en bref
-- Les appareils des enfants n'ont que la clé publique : ils peuvent lire leurs tâches, envoyer des photos et créer une demande, mais **ne peuvent pas s'approuver eux-mêmes** ni modifier les tâches (règles RLS dans `schema.sql`).
-- Les photos sont dans un bucket privé, visibles seulement par les parents connectés (liens temporaires d'une heure).
-- Limite assumée : quelqu'un qui connaîtrait l'URL pourrait créer une fausse demande ou téléverser une image. Pour une app familiale, c'est acceptable ; dis-le-moi si tu veux ajouter un code PIN par enfant.
-
 ## Fichiers
+
 | Fichier | Rôle |
 |---|---|
 | `index.html` | Toute l'app (écran enfant + espace parent) |
-| `config.js` | Clés Supabase et sujet ntfy |
-| `schema.sql` | Tables, règles de sécurité, bucket photos |
+| `config.js` | URL et clé publique Supabase |
+| `schema.sql` | Tables, règles de sécurité, bucket photos, notification |
 | `manifest.webmanifest`, `sw.js`, `icons/` | Installation sur l'écran d'accueil |

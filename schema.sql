@@ -1,27 +1,45 @@
 -- ============================================================
 -- Mission Écran — schéma Supabase
--- À coller dans Supabase > SQL Editor > New query > Run
+-- À coller tel quel dans Supabase > SQL Editor > New query > Run.
+-- Ne mets AUCUNE donnée personnelle dans ce fichier : il est public.
+-- Les courriels autorisés et le sujet ntfy s'ajoutent ensuite
+-- directement dans Supabase (voir l'étape 2 du README).
 -- ============================================================
 
--- 1) Parents autorisés (remplace par ton courriel et celui de l'autre parent)
-create table if not exists public.parents (
-  email text primary key
-);
-insert into public.parents (email) values
-  ('ton.courriel@exemple.com')
-on conflict do nothing;
+create extension if not exists pg_net with schema extensions;
 
-create or replace function public.is_parent()
-returns boolean
+-- 1) Comptes autorisés : 'parent' (approuve, gère) ou 'appareil' (tablette des enfants)
+create table if not exists public.members (
+  email text primary key,
+  role text not null check (role in ('parent', 'appareil'))
+);
+
+create or replace function public.my_role()
+returns text
 language sql stable security definer set search_path = public
 as $$
-  select exists (
-    select 1 from public.parents
-    where lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
-  );
+  select role from public.members
+  where lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''));
 $$;
 
--- 2) Enfants
+create or replace function public.is_member()
+returns boolean language sql stable security definer set search_path = public
+as $$ select public.my_role() is not null; $$;
+
+create or replace function public.is_parent()
+returns boolean language sql stable security definer set search_path = public
+as $$ select public.my_role() = 'parent'; $$;
+
+revoke execute on function public.my_role(), public.is_member(), public.is_parent() from anon, public;
+grant execute on function public.my_role(), public.is_member(), public.is_parent() to authenticated;
+
+-- 2) Réglages privés (sujet ntfy, URL de l'app) — jamais lisibles par l'API
+create table if not exists public.private_settings (
+  key text primary key,
+  value text not null
+);
+
+-- 3) Enfants
 create table if not exists public.children (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -32,7 +50,7 @@ create table if not exists public.children (
   created_at timestamptz not null default now()
 );
 
--- 3) Tâches : récurrentes (days, 0 = dimanche … 6 = samedi) ou ponctuelles (one_off_date)
+-- 4) Tâches : récurrentes (days, 0 = dimanche … 6 = samedi) ou ponctuelles (one_off_date)
 create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid(),
   child_id uuid not null references public.children(id) on delete cascade,
@@ -45,7 +63,7 @@ create table if not exists public.tasks (
   created_at timestamptz not null default now()
 );
 
--- 4) Preuves (une par tâche par jour)
+-- 5) Preuves (une par tâche par jour)
 create table if not exists public.completions (
   id uuid primary key default gen_random_uuid(),
   child_id uuid not null references public.children(id) on delete cascade,
@@ -58,7 +76,7 @@ create table if not exists public.completions (
   unique (task_id, day)
 );
 
--- 5) Demandes de temps d'écran
+-- 6) Demandes de temps d'écran
 create table if not exists public.requests (
   id uuid primary key default gen_random_uuid(),
   child_id uuid not null references public.children(id) on delete cascade,
@@ -73,41 +91,41 @@ create index if not exists requests_child_day on public.requests (child_id, day)
 
 -- ============================================================
 -- Sécurité (RLS)
--- Les appareils des enfants utilisent la clé "anon" : ils peuvent lire
--- les tâches, envoyer des preuves et créer une demande.
--- Seuls les parents connectés (table parents) peuvent approuver,
--- voir les photos et modifier les tâches.
+-- Sans connexion : rien n'est lisible ni modifiable.
+-- Appareil familial : lit les tâches, envoie des preuves, crée une demande.
+-- Parent : tout, y compris approuver et voir les photos.
 -- ============================================================
-alter table public.parents     enable row level security;
-alter table public.children    enable row level security;
-alter table public.tasks       enable row level security;
-alter table public.completions enable row level security;
-alter table public.requests    enable row level security;
+alter table public.members          enable row level security;
+alter table public.private_settings enable row level security;
+alter table public.children         enable row level security;
+alter table public.tasks            enable row level security;
+alter table public.completions      enable row level security;
+alter table public.requests         enable row level security;
+-- members et private_settings : aucune règle = inaccessibles par l'API
 
--- parents : personne ne lit la liste via l'API (la fonction is_parent la lit)
-
-create policy "lecture enfants" on public.children for select using (true);
+create policy "membres lisent enfants" on public.children for select to authenticated using (public.is_member());
 create policy "parents gerent enfants" on public.children for all to authenticated
   using (public.is_parent()) with check (public.is_parent());
 
-create policy "lecture taches" on public.tasks for select using (true);
+create policy "membres lisent taches" on public.tasks for select to authenticated using (public.is_member());
 create policy "parents gerent taches" on public.tasks for all to authenticated
   using (public.is_parent()) with check (public.is_parent());
 
-create policy "lecture preuves" on public.completions for select using (true);
-create policy "enfants envoient preuve" on public.completions for insert to anon, authenticated
-  with check (status = 'done' and parent_note is null
+create policy "membres lisent preuves" on public.completions for select to authenticated using (public.is_member());
+create policy "membres envoient preuve" on public.completions for insert to authenticated
+  with check (public.is_member() and status = 'done' and parent_note is null
               and day between current_date - 1 and current_date + 1);
-create policy "enfants refont preuve" on public.completions for update to anon, authenticated
-  using (day >= current_date - 1)
-  with check (status = 'done' and parent_note is null
+create policy "membres refont preuve" on public.completions for update to authenticated
+  using (public.is_member() and day >= current_date - 1)
+  with check (public.is_member() and status = 'done' and parent_note is null
               and day between current_date - 1 and current_date + 1);
 create policy "parents gerent preuves" on public.completions for all to authenticated
   using (public.is_parent()) with check (public.is_parent());
 
-create policy "lecture demandes" on public.requests for select using (true);
-create policy "enfants demandent" on public.requests for insert to anon, authenticated
-  with check (status = 'pending' and minutes is null and decided_at is null and parent_note is null
+create policy "membres lisent demandes" on public.requests for select to authenticated using (public.is_member());
+create policy "membres demandent" on public.requests for insert to authenticated
+  with check (public.is_member() and status = 'pending' and minutes is null
+              and decided_at is null and parent_note is null
               and day between current_date - 1 and current_date + 1);
 create policy "parents decident" on public.requests for update to authenticated
   using (public.is_parent()) with check (public.is_parent());
@@ -121,9 +139,52 @@ insert into storage.buckets (id, name, public)
 values ('preuves', 'preuves', false)
 on conflict (id) do nothing;
 
-create policy "enfants televersent photos" on storage.objects for insert to anon, authenticated
-  with check (bucket_id = 'preuves');
+create policy "membres televersent photos" on storage.objects for insert to authenticated
+  with check (bucket_id = 'preuves' and public.is_member());
 create policy "parents voient photos" on storage.objects for select to authenticated
   using (bucket_id = 'preuves' and public.is_parent());
 create policy "parents suppriment photos" on storage.objects for delete to authenticated
   using (bucket_id = 'preuves' and public.is_parent());
+
+-- ============================================================
+-- Notification push (ntfy) envoyée par Supabase à chaque nouvelle demande.
+-- Le message ne contient aucun prénom.
+-- ============================================================
+create or replace function public.notify_new_request()
+returns trigger
+language plpgsql security definer set search_path = public, extensions
+as $$
+declare
+  v_topic  text := (select value from public.private_settings where key = 'ntfy_topic');
+  v_server text := coalesce((select value from public.private_settings where key = 'ntfy_server'), 'https://ntfy.sh');
+  v_url    text := (select value from public.private_settings where key = 'app_url');
+  v_body   jsonb;
+begin
+  if coalesce(v_topic, '') = '' then
+    return new;
+  end if;
+  v_body := jsonb_build_object(
+    'topic', v_topic,
+    'title', 'Mission Écran',
+    'message', 'Une demande de temps d''écran attend ton approbation.',
+    'tags', jsonb_build_array('white_check_mark'),
+    'priority', 4
+  );
+  if coalesce(v_url, '') <> '' then
+    v_body := v_body || jsonb_build_object('click', v_url);
+  end if;
+  perform net.http_post(
+    url     := v_server,
+    body    := v_body,
+    headers := '{"Content-Type": "application/json"}'::jsonb
+  );
+  return new;
+exception when others then
+  return new; -- une notif ratée ne doit jamais bloquer la demande
+end;
+$$;
+
+drop trigger if exists requests_notify on public.requests;
+create trigger requests_notify
+  after insert on public.requests
+  for each row execute function public.notify_new_request();

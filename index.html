@@ -179,6 +179,7 @@ function supaStore() {
   return {
     async session() { const {data} = await sb.auth.getSession(); return data.session; },
     async signIn(email, password) { ok(await sb.auth.signInWithPassword({email, password})); },
+    async role() { const {data, error} = await sb.rpc("my_role"); if (error) throw error; return data; },
     async signOut() { await sb.auth.signOut(); },
     async children() { return ok(await sb.from("children").select("*").order("sort").order("created_at")); },
     saveChild: c => save("children", c),
@@ -247,6 +248,7 @@ function demoStore() {
   return {
     async session() { return storeGet("mission-ecran-demo-parent") ? {demo: true} : null; },
     async signIn() { storeSet("mission-ecran-demo-parent", true); },
+    async role() { return "parent"; },
     async signOut() { localStorage.removeItem("mission-ecran-demo-parent"); },
     async children() { return clone(db.children).sort((x, y) => x.sort - y.sort); },
     async saveChild(c) { return upsert("children", c); },
@@ -275,22 +277,6 @@ function demoStore() {
 }
 
 const store = DEMO ? demoStore() : supaStore();
-
-/* ---------- Notification au parent (ntfy) ---------- */
-async function notifyParent(child, nbTasks) {
-  if (!CFG.NTFY_TOPIC) return;
-  const server = (CFG.NTFY_SERVER || "https://ntfy.sh").replace(/\/$/, "");
-  const url = new URL("#/parent", location.href).href;
-  const msg = nbTasks ? `${nbTasks} tâche${nbTasks > 1 ? "s" : ""} faite${nbTasks > 1 ? "s" : ""} avec photo. Touche pour vérifier et accorder le temps d'écran.`
-                      : "Demande de temps d'écran. Touche pour répondre.";
-  try {
-    await fetch(server, {method: "POST", body: JSON.stringify({
-      topic: CFG.NTFY_TOPIC, title: `${child.emoji} ${child.name} a fini ses tâches`, message: msg,
-      tags: ["white_check_mark"], priority: 4, click: url,
-      actions: [{action: "view", label: "Voir les preuves", url}]
-    })});
-  } catch (e) { console.warn("ntfy", e); }
-}
 
 /* ---------- Petite boîte de dialogue ---------- */
 const dlg = $("#dlg");
@@ -321,6 +307,7 @@ function showPhoto(src) {
 /* ---------- Routeur ---------- */
 const app = $("#app");
 let timer = null;
+let myRole = undefined;
 function setTimer(fn, ms) { clearInterval(timer); timer = fn ? setInterval(fn, ms) : null; }
 
 async function route() {
@@ -328,6 +315,12 @@ async function route() {
   const h = location.hash.replace(/^#\/?/, "");
   const [view, id] = h.split("/");
   try {
+    if (!DEMO) {
+      const session = await store.session();
+      if (!session) return loginView();
+      if (myRole === undefined) myRole = await store.role();
+      if (!myRole) return notMemberView();
+    }
     if (view === "enfant" && id) return await kidView(id);
     if (view === "parent") return await parentView();
     return await homeView();
@@ -426,7 +419,7 @@ async function kidView(childId) {
     const askBtn = $("#ask");
     if (askBtn) askBtn.onclick = async () => {
       askBtn.disabled = true; askBtn.innerHTML = `<span class="spin"></span> Envoi…`;
-      try { await store.createRequest(childId, d); await notifyParent(child, tasks.length); toast("Demande envoyée !"); }
+      try { await store.createRequest(childId, d); toast("Demande envoyée !"); }
       catch (e) { toast("Erreur : " + (e.message || e)); }
       draw();
     };
@@ -454,16 +447,15 @@ let parentTab = "demandes";
 let taskKid = null;
 
 async function parentView() {
-  const session = await store.session();
-  if (!session && !DEMO) return loginView();
-  if (!session && DEMO) await store.signIn();
+  if (DEMO) await store.signIn();
+  else if (myRole !== "parent") return deviceOnlyView();
   const kids = await store.children();
   const tabs = [["demandes", "Demandes"], ["taches", "Tâches"], ["enfants", "Enfants"], ["historique", "Historique"]];
   app.innerHTML = shell("Espace parent", fmtDay(today()), `<button id="home">Accueil</button>${DEMO ? "" : `<button id="out">Quitter</button>`}`, `
     <div class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === parentTab ? "on" : ""}">${l}</button>`).join("")}</div>
     <div id="pane"></div>`);
   $("#home").onclick = () => { sessionStorage.setItem("choose", "1"); location.hash = "#/"; };
-  $("#out")?.addEventListener("click", async () => { await store.signOut(); route(); });
+  $("#out")?.addEventListener("click", async () => { await store.signOut(); myRole = undefined; location.hash = "#/"; route(); });
   app.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { parentTab = b.dataset.tab; parentView(); });
   const pane = $("#pane");
   setTimer(null);
@@ -474,8 +466,9 @@ async function parentView() {
 }
 
 function loginView() {
-  app.innerHTML = shell("Espace parent", "Connexion", `<button onclick="location.hash='#/'">Accueil</button>`, `
+  app.innerHTML = shell("Mission Écran", "Connexion", "", `
     <form id="login" class="card stack" style="margin-top:18px">
+      <p class="muted" style="margin:0">Connecte cet appareil avec le compte de l'appareil familial (tablette des enfants) ou ton compte parent.</p>
       <label class="field"><span>Courriel</span><input name="email" type="email" autocomplete="username" required></label>
       <label class="field"><span>Mot de passe</span><input name="pw" type="password" autocomplete="current-password" required></label>
       <div id="lerr"></div>
@@ -484,9 +477,28 @@ function loginView() {
   $("#login").onsubmit = async e => {
     e.preventDefault();
     const f = e.target;
-    try { await store.signIn(f.email.value.trim(), f.pw.value); route(); }
-    catch (err) { $("#lerr").innerHTML = `<div class="err">${esc(err.message || err)}</div>`; }
+    try { await store.signIn(f.email.value.trim(), f.pw.value); myRole = undefined; route(); }
+    catch (err) { $("#lerr").innerHTML = `<div class="err">Connexion refusée. Vérifie le courriel et le mot de passe.</div>`; }
   };
+}
+
+function notMemberView() {
+  app.innerHTML = shell("Mission Écran", "", "", `
+    <div class="card stack" style="margin-top:18px">
+      <div>Ce compte n'est pas autorisé dans Mission Écran.</div>
+      <button class="btn ghost" id="sw">Changer de compte</button>
+    </div>`);
+  $("#sw").onclick = async () => { await store.signOut(); myRole = undefined; route(); };
+}
+
+function deviceOnlyView() {
+  app.innerHTML = shell("Espace parent", "", `<button onclick="location.hash='#/'">Accueil</button>`, `
+    <div class="card stack" style="margin-top:18px">
+      <div>Cet appareil est connecté comme appareil familial. L'espace parent s'ouvre sur ton téléphone.</div>
+      <div class="small muted">Tu peux aussi te connecter ici avec ton compte parent. Il faudra ensuite reconnecter l'appareil familial pour les enfants.</div>
+      <button class="btn ghost" id="sw">Me connecter en parent</button>
+    </div>`);
+  $("#sw").onclick = async () => { await store.signOut(); myRole = undefined; loginView(); };
 }
 
 async function paneRequests(pane, kids) {
