@@ -57,6 +57,9 @@ h2{font-size:18px;margin:22px 0 10px}
 .who{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:8px}
 .who button{background:var(--card);border:2px solid var(--line);border-radius:24px;padding:22px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:20px;font-weight:700}
 .who .av{width:84px;height:84px;border-radius:50%;display:grid;place-items:center;font-size:46px}
+.av{position:relative}
+.pastille{position:absolute;top:-4px;right:-6px;padding:0 7px;border-radius:15px;background:#DC2626;color:#fff;font:800 15px/28px system-ui,sans-serif;text-align:center;border:3px solid var(--card);box-sizing:border-box;min-width:30px;height:30px;line-height:24px}
+.pastille.fini{background:var(--ok)}
 .parent-link{display:block;margin:28px auto 0;color:var(--muted);font-size:15px;padding:12px}
 
 /* Écran enfant */
@@ -151,6 +154,23 @@ function tasksForDay(tasks, childId, d = today()) {
   const w = new Date(d + "T12:00:00").getDay();
   return tasks.filter(t => t.child_id === childId && t.active &&
     (t.one_off_date ? t.one_off_date === d : (t.days || []).includes(w)));
+}
+
+function pastille(n, total) {
+  if (!total) return "";
+  return n > 0 ? `<span class="pastille" aria-label="${n} tâche${n > 1 ? "s" : ""} à faire">${n}</span>`
+               : `<span class="pastille fini" aria-label="Tout est fait">✓</span>`;
+}
+function setIconBadge(n) {
+  try {
+    if (n > 0) navigator.setAppBadge?.(n)?.catch?.(() => {});
+    else navigator.clearAppBadge?.()?.catch?.(() => {});
+  } catch {}
+}
+function remainingFor(tasks, comps, childId, d) {
+  const list = tasksForDay(tasks, childId, d);
+  const done = list.filter(t => comps.some(c => c.task_id === t.id && c.status === "done")).length;
+  return {left: list.length - done, total: list.length};
 }
 
 /* ---------- Photos : compression avant envoi ---------- */
@@ -346,10 +366,14 @@ async function homeView() {
   if (remembered && kids.some(k => k.id === remembered) && !sessionStorage.getItem("choose")) {
     location.replace("#/enfant/" + remembered); return;
   }
-  app.innerHTML = shell("Mission Écran", fmtDay(today()), "", `
+  const d = today();
+  const [allTasks, comps] = kids.length ? await Promise.all([store.tasks(), store.completions(d)]) : [[], []];
+  const counts = Object.fromEntries(kids.map(k => [k.id, remainingFor(allTasks, comps, k.id, d)]));
+  setIconBadge(kids.reduce((n, k) => n + counts[k.id].left, 0));
+  app.innerHTML = shell("Mission Écran", fmtDay(d), "", `
     <h2 style="font-size:24px;text-align:center;margin-top:18px">Qui es-tu ?</h2>
     ${kids.length ? `<div class="who">${kids.map(k => `
-      <button data-kid="${k.id}"><span class="av" style="background:${esc(k.color)}">${esc(k.emoji)}</span>${esc(k.name)}</button>`).join("")}</div>`
+      <button data-kid="${k.id}"><span class="av" style="background:${esc(k.color)}">${esc(k.emoji)}${pastille(counts[k.id].left, counts[k.id].total)}</span>${esc(k.name)}</button>`).join("")}</div>`
       : `<div class="card muted" style="text-align:center">Aucun enfant pour l'instant. Un parent doit les ajouter dans l'espace parent.</div>`}
     <a class="parent-link" href="#/parent" style="text-align:center">🔒 Espace parent</a>`);
   app.querySelectorAll("[data-kid]").forEach(b => b.onclick = () => {
@@ -396,7 +420,7 @@ async function kidView(childId) {
     }
 
     app.innerHTML = shell("Mission Écran", fmtDay(d), `<button id="switch">Changer</button>`, `
-      <div class="hello"><span class="av" style="background:${esc(child.color)}">${esc(child.emoji)}</span>
+      <div class="hello"><span class="av" style="background:${esc(child.color)}">${esc(child.emoji)}${pastille(tasks.length - doneCount, tasks.length)}</span>
         <div><h2>Salut ${esc(child.name)} !</h2><div class="muted">${tasks.length ? `${doneCount} sur ${tasks.length} tâche${tasks.length > 1 ? "s" : ""}` : "Journée libre"}</div></div></div>
       ${tasks.length ? `<div class="progress"><i style="width:${pct}%"></i></div>` : ""}
       ${status ? `<div style="margin:16px 0">${status}</div>` : ""}
@@ -424,6 +448,7 @@ async function kidView(childId) {
       catch (e) { toast("Erreur : " + (e.message || e)); }
       draw();
     };
+    setIconBadge(tasks.length - doneCount);
     setTimer(req?.status === "pending" ? draw : null, 8000);
   };
 
