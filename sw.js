@@ -1,5 +1,5 @@
 // Service worker minimal : permet l'installation et un démarrage hors-ligne de l'interface.
-const CACHE = "mission-ecran-v1";
+const CACHE = "mission-ecran-v2";
 const SHELL = ["./", "./index.html", "./config.js", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
