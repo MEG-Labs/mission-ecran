@@ -166,7 +166,7 @@ begin
   v_body := jsonb_build_object(
     'topic', v_topic,
     'title', 'Mission Écran',
-    'message', 'Une demande de temps d''écran attend ton approbation.',
+    'message', 'Les tâches sont terminées. Touche pour voir les photos.',
     'tags', jsonb_build_array('white_check_mark'),
     'priority', 4
   );

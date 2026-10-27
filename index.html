@@ -379,20 +379,20 @@ async function kidView(childId) {
 
     let status = "";
     if (req?.status === "pending") {
-      status = `<div class="status pending"><div class="ico">⏳</div><h3>Demande envoyée !</h3>
+      status = `<div class="status pending"><div class="ico">⏳</div><h3>C'est envoyé !</h3>
         <div><span class="spin"></span>&nbsp; ${esc(PARENT_LABEL)} regarde tes photos…</div></div>`;
     } else if (req?.status === "approved") {
       status = `<div class="status approved"><div class="ico">🎉</div><h3>Bravo ${esc(child.name)} !</h3>
-        <div style="font-size:20px"><b>${req.minutes || ""} minutes</b> de temps d'écran accordées.</div>
-        ${req.parent_note ? `<div style="margin-top:8px">« ${esc(req.parent_note)} »</div>` : ""}</div>`;
+        ${req.parent_note ? `<div style="font-size:20px;margin:6px 0">« ${esc(req.parent_note)} »</div>` : ""}
+        <div>${req.minutes > 0 ? `<b>${req.minutes} minutes</b> de temps d'écran accordées.` : "Tes tâches sont validées."}</div></div>`;
     } else if (req?.status === "rejected" && !allDone) {
       status = `<div class="status rejected"><div class="ico">🔁</div><h3>Presque !</h3>
         <div>${req.parent_note ? esc(req.parent_note) : "Certaines tâches sont à refaire."}</div></div>`;
     } else if (allDone) {
       status = `<div class="status done"><div class="ico">${tasks.length ? "🏁" : "😎"}</div>
         <h3>${tasks.length ? "Tout est fait !" : "Pas de tâches aujourd'hui"}</h3>
-        <p class="muted" style="margin:4px 0 14px">${req?.status === "rejected" ? "Tes tâches sont refaites. Tu peux redemander." : "Demande ton temps d'écran."}</p>
-        <button class="btn big" id="ask">📱 Demander mon temps d'écran</button></div>`;
+        <p class="muted" style="margin:4px 0 14px">${req?.status === "rejected" ? `Tes tâches sont refaites. Avise ${esc(PARENT_LABEL)} de nouveau.` : `Avise ${esc(PARENT_LABEL)} pour faire vérifier tes photos.`}</p>
+        <button class="btn big" id="ask">📣 J'ai fini ! Aviser ${esc(PARENT_LABEL)}</button></div>`;
     }
 
     app.innerHTML = shell("Mission Écran", fmtDay(d), `<button id="switch">Changer</button>`, `
@@ -420,7 +420,7 @@ async function kidView(childId) {
     const askBtn = $("#ask");
     if (askBtn) askBtn.onclick = async () => {
       askBtn.disabled = true; askBtn.innerHTML = `<span class="spin"></span> Envoi…`;
-      try { await store.createRequest(childId, d); toast("Demande envoyée !"); }
+      try { await store.createRequest(childId, d); toast("C'est envoyé !"); }
       catch (e) { toast("Erreur : " + (e.message || e)); }
       draw();
     };
@@ -516,7 +516,7 @@ async function paneRequests(pane, kids) {
     const kc = comps.filter(c => c.child_id === k.id);
     const done = tasks.filter(t => kc.find(c => c.task_id === t.id && c.status === "done")).length;
     const r = latest.get(k.id);
-    const label = r ? {pending: "En attente", approved: `Approuvé · ${r.minutes} min`, rejected: "Refusé"}[r.status] : "Pas encore demandé";
+    const label = r ? {pending: "À valider", approved: r.minutes > 0 ? `Validé · ${r.minutes} min` : "Validé", rejected: "À revoir"}[r.status] : "Pas encore avisé";
     return `<div class="card" data-kidcard="${k.id}">
       <div class="kid-head"><span class="av" style="background:${esc(k.color)}">${esc(k.emoji)}</span>
         <div class="grow"><b>${esc(k.name)}</b><div class="small muted">${done}/${tasks.length} tâches faites</div></div>
@@ -531,12 +531,16 @@ async function paneRequests(pane, kids) {
           </div></div>`;
       }).join("")}</div>` : ""}
       ${r?.status === "pending" ? `
-        <div class="mins">${[30, 45, 60, 90, 120].map(m => `<button class="chip ${m === (k.default_minutes || 60) ? "on" : ""}" data-min="${m}">${m} min</button>`).join("")}</div>
+        <div class="small muted" style="margin-top:14px">Temps d'écran</div>
+        <div class="mins" style="margin-top:6px">${[...new Set([0, 30, 45, 60, 90, 120, k.default_minutes ?? 60])].sort((x, y) => x - y).map(m => `<button class="chip ${m === (k.default_minutes ?? 60) ? "on" : ""}" data-min="${m}">${m ? m + " min" : "Aucun"}</button>`).join("")}</div>
+        <label class="field" style="margin-bottom:12px"><span>Petit mot pour ${esc(k.name)}</span>
+          <input data-note placeholder="Beau travail ! 😊" maxlength="140"></label>
         <div class="row">
-          <button class="btn ok grow" data-approve="${r.id}">✅ Approuver</button>
-          <button class="btn bad" data-reject="${r.id}">Refuser</button>
+          <button class="btn ok grow" data-approve="${r.id}">✅ Valider</button>
+          <button class="btn bad" data-reject="${r.id}">À revoir</button>
         </div>` : ""}
-      ${r?.status === "approved" ? `<div class="row" style="margin-top:12px">
+      ${r?.status === "approved" && r.parent_note ? `<div class="small muted" style="margin-top:10px">Ton mot : « ${esc(r.parent_note)} »</div>` : ""}
+      ${r?.status === "approved" && r.minutes > 0 ? `<div class="row" style="margin-top:12px">
         <a class="btn ghost sm" href="intent://#Intent;package=com.google.android.apps.kids.familylink;end">Ouvrir Family Link</a>
         <span class="small muted">Accorde ${r.minutes} min à ${esc(k.name)} dans Family Link.</span></div>` : ""}
     </div>`;
@@ -561,17 +565,18 @@ async function paneRequests(pane, kids) {
   });
   pane.querySelectorAll("[data-approve]").forEach(b => b.onclick = async () => {
     const card = b.closest("[data-kidcard]");
-    const minutes = +card.querySelector(".chip.on")?.dataset.min || 60;
+    const minutes = +(card.querySelector(".chip.on")?.dataset.min ?? 0);
+    const note = card.querySelector("[data-note]").value.trim() || "Beau travail ! 😊";
     b.disabled = true;
-    await store.decide(b.dataset.approve, {status: "approved", minutes});
-    toast(`Approuvé : ${minutes} min. Accorde-les dans Family Link.`, 4000);
+    await store.decide(b.dataset.approve, {status: "approved", minutes, parent_note: note});
+    toast(minutes > 0 ? `Validé : ${minutes} min. Accorde-les dans Family Link.` : "Validé, sans temps d'écran.", 4000);
     paneRequests(pane, kids);
   });
   pane.querySelectorAll("[data-reject]").forEach(b => b.onclick = async () => {
-    const note = await ask({title: "Refuser la demande", text: "Qu'est-ce qui manque ?", placeholder: "Ex. : refais la photo de ta chambre"});
+    const note = await ask({title: "À revoir", text: "Qu'est-ce qui manque ?", placeholder: "Ex. : refais la photo de ta chambre"});
     if (note === null) return;
     await store.decide(b.dataset.reject, {status: "rejected", parent_note: note || null});
-    toast("Demande refusée"); paneRequests(pane, kids);
+    toast("Envoyé à l'enfant"); paneRequests(pane, kids);
   });
 }
 
@@ -649,7 +654,7 @@ async function paneKids(pane, kids) {
       <input type="hidden" name="id">
       <div class="row">
         <label class="field grow"><span>Prénom</span><input name="name" required></label>
-        <label class="field" style="width:130px"><span>Minutes par défaut</span><input name="min" type="number" min="5" step="5" value="60"></label>
+        <label class="field" style="width:130px"><span>Minutes par défaut</span><input name="min" type="number" min="0" step="5" value="60"></label>
       </div>
       <div><div class="small muted" style="margin-bottom:6px">Avatar</div>
         <div class="row">${EMOJIS_KID.map((e, i) => `<label class="chip"><input type="radio" name="emoji" value="${e}" ${i === 0 ? "checked" : ""} hidden>${e}</label>`).join("")}</div></div>
@@ -672,7 +677,7 @@ async function paneKids(pane, kids) {
   });
   f.onsubmit = async e => {
     e.preventDefault();
-    const obj = {name: f.name.value.trim(), emoji: f.emoji.value, default_minutes: +f.min.value || 60};
+    const obj = {name: f.name.value.trim(), emoji: f.emoji.value, default_minutes: f.min.value === "" ? 60 : Math.max(0, +f.min.value)};
     if (f.id.value) obj.id = f.id.value;
     else { obj.color = COLORS[kids.length % COLORS.length]; obj.sort = kids.length; }
     await store.saveChild(obj); toast("Enregistré"); parentView();
@@ -693,7 +698,7 @@ async function paneHistory(pane, kids) {
       <div class="card"><b style="text-transform:capitalize">${fmtDay(day)}</b>
         <div class="list" style="margin-top:6px">${rs.map(r => `<div class="row">
           <span class="grow">${esc(name(r.child_id))} <span class="small muted">${fmtTime(r.created_at)}</span></span>
-          <span class="badge ${r.status}">${{pending: "En attente", approved: (r.minutes || 0) + " min", rejected: "Refusé"}[r.status]}</span></div>
+          <span class="badge ${r.status}">${{pending: "À valider", approved: r.minutes > 0 ? r.minutes + " min" : "Validé", rejected: "À revoir"}[r.status]}</span></div>
           ${r.parent_note ? `<div class="small muted" style="padding-top:0;border:0">« ${esc(r.parent_note)} »</div>` : ""}`).join("")}</div></div>`).join("")
       : `<div class="card muted">Aucune demande pour l'instant.</div>`}</div>`;
 }
